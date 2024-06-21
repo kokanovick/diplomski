@@ -1,8 +1,7 @@
 import os
 import numpy as np
-from tensorflow.keras.models import Model, load_model
-from tensorflow.keras.applications.vgg19 import preprocess_input
-from tensorflow.keras.preprocessing import image as keras_image
+import torch
+from torchvision import transforms
 from pdf2image import convert_from_path
 import pytesseract
 import re
@@ -11,6 +10,15 @@ from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords, wordnet
 from nltk.stem import WordNetLemmatizer
 import cv2
+from PIL import Image
+import sys
+import pathlib
+from pytorch_grad_cam  import GradCAM
+import torch.nn.functional as F
+
+sys.path.insert(0, 'C:/Users/SW6/Desktop/diplomski/yolov5')
+temp = pathlib.PosixPath
+pathlib.PosixPath = pathlib.WindowsPath
 
 nltk.download('punkt')
 nltk.download('stopwords')
@@ -65,19 +73,33 @@ def preprocess_text(text):
     return tokens
 
 def preprocess_image(image_path):
-    img = keras_image.load_img(image_path, target_size=(224, 224))
-    img_array = keras_image.img_to_array(img)
-    img_array = np.expand_dims(img_array, axis=0)
-    img_array = preprocess_input(img_array)
-    return img_array
+    image = Image.open(image_path).convert('RGB')
+    preprocess = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    image_tensor = preprocess(image).unsqueeze(0)
+    return image_tensor, np.array(image)
 
-def load_best_model():
-    return load_model('C:/Users/SW6/Desktop/best_model.keras')
+def load_yolov5_model(weights_path):
+    model = torch.hub.load('C:/Users/SW6/Desktop/diplomski/yolov5', 'custom', source='local', path=weights_path)
+    model.eval()
+    return model
 
-def extract_image_features(image_path, model):
-    img_array = preprocess_image(image_path)
-    features = model.predict(img_array)
-    return features.flatten()
+def generate_cam(image_tensor, model, original_image):
+    image_tensor.requires_grad = True
+    target_layer = model.model.model[9].conv.conv
+    cam = GradCAM(model=model, target_layers=[target_layer])
+    grayscale_cam = cam(input_tensor=image_tensor, targets=None)[0, :]
+    heatmap = cv2.resize(grayscale_cam, (original_image.shape[1], original_image.shape[0]))     
+    heatmap = np.uint8(255 * heatmap)
+    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)     
+    image_weight = 0.5
+    cam_image = heatmap * image_weight + original_image * (1 - image_weight)
+    cam_image = np.clip(cam_image, 0, 255).astype(np.uint8)
+    Image.fromarray(cam_image).save('cam_result.jpg')  
+    return cam_image, heatmap
 
 def crop_schematic(image_path):
     image = cv2.imread(image_path)
@@ -86,8 +108,7 @@ def crop_schematic(image_path):
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blurred, 50, 150)
     dilated = cv2.dilate(edges, None, iterations=2)
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)   
     x_min, y_min, x_max, y_max = float('inf'), float('inf'), float('-inf'), float('-inf')
     for contour in contours:
         M = cv2.moments(contour)
@@ -101,56 +122,24 @@ def crop_schematic(image_path):
             y_min = min(y_min, y)
             x_max = max(x_max, x + w)
             y_max = max(y_max, y + h)
-
     cropped_image = image[y_min:y_max, x_min:x_max]
-    cropped_image_path = os.path.join(folder_path, "cropped_image.jpg")
+    cropped_image_path = os.path.join(os.path.dirname(image_path), "cropped_image.jpg")
     cv2.imwrite(cropped_image_path, cropped_image)
     return cropped_image_path
 
-def generate_cam(image_path, model, last_conv_layer_name, classifier_layer_names):
-    img_array = preprocess_image(image_path)
-    model_input = model.input
-    cam_model = Model(
-        inputs=model_input,
-        outputs=[model.get_layer(last_conv_layer_name).output, model.output]
-    )
-    conv_output, predictions = cam_model.predict(img_array)
-      
-    # Get the weights of the last classifier layer
-    last_classifier_layer_name = classifier_layer_names[-1]
-    class_weights = model.get_layer(last_classifier_layer_name).get_weights()[0]
+def extract_object_features(image_tensor, model):
+    with torch.no_grad():
+        results = model(image_tensor)    
+    embeddings = results.cpu().numpy() 
+    features = [{ 'embedding': embedding.tolist(),} for embedding in embeddings]
+    logits = results.squeeze()
+    probabilities = F.softmax(logits, dim=-1)
+    return features
 
-    predicted_class = np.argmax(predictions[0])
-    class_activation_weights = class_weights[:, predicted_class]
-
-    # Compute CAM
-    cam = np.zeros(dtype=np.float32, shape=conv_output.shape[1:3])   
-    for i in range(min(class_activation_weights.shape[0], conv_output.shape[-1])):
-        cam += class_activation_weights[i] * conv_output[0, :, :, i]
-    
-    cam = cv2.resize(cam, (224, 224))
-    cam = np.maximum(cam, 0)
-    cam = cam / cam.max()
-
-    # Overlay CAM on original image
-    image = cv2.imread(image_path)
-    heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
-    heatmap = cv2.resize(heatmap, (image.shape[1], image.shape[0]))
-    if heatmap.shape[2] != image.shape[2]:
-        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
-    
-    superimposed_image = cv2.addWeighted(heatmap, 0.4, image, 0.6, 0)
-    cam_image_path = os.path.join(os.path.dirname(image_path), "cam_image.jpg")
-    cv2.imwrite(cam_image_path, superimposed_image)
-    
-    return cam_image_path
-
-
-def process_pdfs_in_folder(folder_path):
+def process_pdfs_in_folder(folder_path, weights_path):
     tokens = []
     image_features = []
-    model = load_best_model()
-    
+    model = load_yolov5_model(weights_path)
     for file_name in os.listdir(folder_path):
         if file_name.endswith('.pdf'):
             pdf_path = os.path.join(folder_path, file_name)
@@ -160,13 +149,18 @@ def process_pdfs_in_folder(folder_path):
             image_path = os.path.join(folder_path, "temp_image.jpg")
             page[0].save(image_path, 'JPEG')
             cropped_image_path = crop_schematic(image_path)
-            cam_image_path = generate_cam(cropped_image_path, model, last_conv_layer_name='block5_conv4', classifier_layer_names=['dense'])
-            features = extract_image_features(cam_image_path, model)
-            image_features.append(features)
+            image_tensor, original_image = preprocess_image(cropped_image_path)
+            cam_image, heatmap = generate_cam(image_tensor, model, original_image)
+            features = extract_object_features(image_tensor, model)
+            image_features.append({
+                'features': features,
+                'cam_intensity': np.mean(heatmap)
+            })
             os.remove(image_path)
             os.remove(cropped_image_path)
                 
     return tokens, image_features
 
 folder_path = 'C:/Users/SW6/Desktop/test'
-tokens, image_features = process_pdfs_in_folder(folder_path)
+weights_path = 'C:/Users/SW6/Desktop/diplomski/best.pt'
+tokens, image_features = process_pdfs_in_folder(folder_path, weights_path)
