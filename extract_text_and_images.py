@@ -15,6 +15,8 @@ import sys
 import pathlib
 from pytorch_grad_cam  import GradCAM
 import torch.nn.functional as F
+import torchvision.models as models
+import torch.nn as nn
 
 sys.path.insert(0, 'C:/Users/SW6/Desktop/diplomski/yolov5')
 temp = pathlib.PosixPath
@@ -80,12 +82,17 @@ def preprocess_image(image_path):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
     image_tensor = preprocess(image).unsqueeze(0)
-    return image_tensor, np.array(image)
+    return image_tensor
 
 def load_yolov5_model(weights_path):
     model = torch.hub.load('C:/Users/SW6/Desktop/diplomski/yolov5', 'custom', source='local', path=weights_path)
     model.eval()
     return model
+
+def load_vgg19_model():
+    vgg19 = models.vgg19(weights=models.VGG19_Weights.IMAGENET1K_V1)
+    vgg19.classifier = nn.Sequential(*list(vgg19.classifier.children())[:-1])
+    return vgg19
 
 def generate_cam(image_tensor, model, original_image):
     image_tensor.requires_grad = True
@@ -127,40 +134,63 @@ def crop_schematic(image_path):
     cv2.imwrite(cropped_image_path, cropped_image)
     return cropped_image_path
 
-def extract_object_features(image_tensor, model):
+def extract_image_features(image_tensor, vgg19_model):
     with torch.no_grad():
-        results = model(image_tensor)    
-    embeddings = results.cpu().numpy() 
-    features = [{ 'embedding': embedding.tolist(),} for embedding in embeddings]
-    logits = results.squeeze()
-    probabilities = F.softmax(logits, dim=-1)
+        features = vgg19_model(image_tensor).cpu().numpy()
     return features
 
-def process_pdfs_in_folder(folder_path, weights_path):
+def detect_components(image_path, model):
+    results = model(image_path)
+    probabilities = F.softmax(results, dim=1)
+    return probabilities
+
+def extract_text_features(image_path):
+    text = pytesseract.image_to_string(Image.open(image_path))
+    tokens = preprocess_text(text)
+    return tokens
+
+def classify_image(detections, threshold=0.5):
+    class_labels = {0: 'electronics', 1: 'flowchart'}
+    class_scores = detections[0]
+    predicted_class_index = class_scores.argmax().item()
+    predicted_class_score = class_scores.max().item()
+    if predicted_class_score >= threshold:
+        return class_labels[predicted_class_index]
+    else:
+        return None
+
+def process_pdfs_in_folder(folder_path, yolov5_model, vgg19_model):
     tokens = []
     image_features = []
-    model = load_yolov5_model(weights_path)
+    
     for file_name in os.listdir(folder_path):
         if file_name.endswith('.pdf'):
             pdf_path = os.path.join(folder_path, file_name)
             combined_text = extract_title_and_abstract(pdf_path)
             tokens.append(preprocess_text(combined_text))
+            
             page = convert_from_path(pdf_path, dpi=600)
             image_path = os.path.join(folder_path, "temp_image.jpg")
             page[0].save(image_path, 'JPEG')
             cropped_image_path = crop_schematic(image_path)
-            image_tensor, original_image = preprocess_image(cropped_image_path)
-            cam_image, heatmap = generate_cam(image_tensor, model, original_image)
-            features = extract_object_features(image_tensor, model)
-            image_features.append({
-                'features': features,
-                'cam_intensity': np.mean(heatmap)
-            })
-            os.remove(image_path)
+            image_tensor = preprocess_image(cropped_image_path)
+            
+            detections = detect_components(image_tensor, yolov5_model)
+            classification = classify_image(detections)
+            
+            if classification == 'flowchart':
+                image_features.append(extract_text_features(cropped_image_path))
+            elif classification == 'electronics':
+                image_features.append(extract_image_features(image_tensor, vgg19_model))
+            else:
+                image_features.append(None)
             os.remove(cropped_image_path)
+            os.remove(image_path)
                 
     return tokens, image_features
 
-folder_path = 'C:/Users/SW6/Desktop/test'
 weights_path = 'C:/Users/SW6/Desktop/diplomski/best.pt'
-tokens, image_features = process_pdfs_in_folder(folder_path, weights_path)
+yolov5_model = load_yolov5_model(weights_path)
+vgg19_model = load_vgg19_model()
+folder_path = 'C:/Users/SW6/Desktop/test'
+tokens, image_features = process_pdfs_in_folder(folder_path, yolov5_model, vgg19_model)
