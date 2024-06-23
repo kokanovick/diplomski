@@ -6,11 +6,7 @@ from pdf2image import convert_from_path
 import pytesseract
 import re
 import nltk
-<<<<<<< HEAD
 from nltk.tokenize import sent_tokenize, word_tokenize
-=======
-from nltk.tokenize import word_tokenize
->>>>>>> 6e9c0cd1e7766a473d7fb0838a824ccce6c9ccc6
 from nltk.corpus import stopwords, wordnet
 from nltk.stem import WordNetLemmatizer
 import cv2
@@ -21,10 +17,7 @@ from pytorch_grad_cam  import GradCAM
 import torch.nn.functional as F
 import torchvision.models as models
 import torch.nn as nn
-<<<<<<< HEAD
 from torchtext.vocab import build_vocab_from_iterator
-=======
->>>>>>> 6e9c0cd1e7766a473d7fb0838a824ccce6c9ccc6
 
 sys.path.insert(0, 'C:/Users/SW6/Desktop/diplomski/yolov5')
 temp = pathlib.PosixPath
@@ -73,7 +66,6 @@ def extract_title_and_abstract(pdf_path):
     return combined_text
 
 def preprocess_text(text):
-<<<<<<< HEAD
     sentences = sent_tokenize(text.lower())
     stop_words = set(stopwords.words('english'))
     lemmatizer = WordNetLemmatizer()
@@ -152,16 +144,6 @@ def load_embeddings(file_path, embedding_dim=150):
             coefs = np.asarray(values[1:], dtype='float32')
             embeddings_index[word] = coefs
     return embeddings_index
-=======
-    tokens = word_tokenize(text.lower())
-    tokens = [re.sub(r'[^a-zA-Z0-9]', '', token) for token in tokens]
-    tokens = [token for token in tokens if token]
-    stop_words = set(stopwords.words('english'))
-    tokens = [word for word in tokens if word not in stop_words]
-    lemmatizer = WordNetLemmatizer()
-    tokens = [lemmatizer.lemmatize(word, get_wordnet_pos(word)) for word in tokens]  
-    return tokens
->>>>>>> 6e9c0cd1e7766a473d7fb0838a824ccce6c9ccc6
 
 def preprocess_image(image_path):
     image = Image.open(image_path).convert('RGB')
@@ -180,10 +162,6 @@ def load_yolov5_model(weights_path):
 
 def load_vgg19_model():
     vgg19 = models.vgg19(weights=models.VGG19_Weights.IMAGENET1K_V1)
-<<<<<<< HEAD
-=======
-    vgg19.classifier = nn.Sequential(*list(vgg19.classifier.children())[:-1])
->>>>>>> 6e9c0cd1e7766a473d7fb0838a824ccce6c9ccc6
     return vgg19
 
 def generate_cam(image_tensor, model, original_image):
@@ -249,11 +227,7 @@ def classify_image(detections, threshold=0.5):
     if predicted_class_score >= threshold:
         return class_labels[predicted_class_index]
     else:
-<<<<<<< HEAD
         return None   
-=======
-        return None
->>>>>>> 6e9c0cd1e7766a473d7fb0838a824ccce6c9ccc6
 
 def process_pdfs_in_folder(folder_path, yolov5_model, vgg19_model):
     tokens = []
@@ -264,11 +238,7 @@ def process_pdfs_in_folder(folder_path, yolov5_model, vgg19_model):
             pdf_path = os.path.join(folder_path, file_name)
             combined_text = extract_title_and_abstract(pdf_path)
             tokens.append(preprocess_text(combined_text))
-<<<<<<< HEAD
     
-=======
-            
->>>>>>> 6e9c0cd1e7766a473d7fb0838a824ccce6c9ccc6
             page = convert_from_path(pdf_path, dpi=600)
             image_path = os.path.join(folder_path, "temp_image.jpg")
             page[0].save(image_path, 'JPEG')
@@ -293,7 +263,6 @@ weights_path = 'C:/Users/SW6/Desktop/diplomski/best.pt'
 yolov5_model = load_yolov5_model(weights_path)
 vgg19_model = load_vgg19_model()
 folder_path = 'C:/Users/SW6/Desktop/test'
-<<<<<<< HEAD
 tokens, image_features = process_pdfs_in_folder(folder_path, yolov5_model, vgg19_model)
 
 embedding_dim = 50
@@ -339,6 +308,3 @@ padded_documents = pad_documents(indexed_documents)
 hidden_dim = len(indexed_sent)
 model = HAN(embedding_matrix, hidden_dim)
 output = model(padded_documents)
-=======
-tokens, image_features = process_pdfs_in_folder(folder_path, yolov5_model, vgg19_model)
->>>>>>> 6e9c0cd1e7766a473d7fb0838a824ccce6c9ccc6
