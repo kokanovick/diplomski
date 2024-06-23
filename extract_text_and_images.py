@@ -6,7 +6,7 @@ from pdf2image import convert_from_path
 import pytesseract
 import re
 import nltk
-from nltk.tokenize import word_tokenize
+from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords, wordnet
 from nltk.stem import WordNetLemmatizer
 import cv2
@@ -17,6 +17,7 @@ from pytorch_grad_cam  import GradCAM
 import torch.nn.functional as F
 import torchvision.models as models
 import torch.nn as nn
+from torchtext.vocab import build_vocab_from_iterator
 
 sys.path.insert(0, 'C:/Users/SW6/Desktop/diplomski/yolov5')
 temp = pathlib.PosixPath
@@ -65,14 +66,84 @@ def extract_title_and_abstract(pdf_path):
     return combined_text
 
 def preprocess_text(text):
-    tokens = word_tokenize(text.lower())
-    tokens = [re.sub(r'[^a-zA-Z0-9]', '', token) for token in tokens]
-    tokens = [token for token in tokens if token]
+    sentences = sent_tokenize(text.lower())
     stop_words = set(stopwords.words('english'))
-    tokens = [word for word in tokens if word not in stop_words]
     lemmatizer = WordNetLemmatizer()
-    tokens = [lemmatizer.lemmatize(word, get_wordnet_pos(word)) for word in tokens]  
-    return tokens
+    
+    processed_sentences = []
+    for sentence in sentences:
+        tokens = word_tokenize(sentence)
+        tokens = [re.sub(r'[^a-zA-Z0-9]', '', token) for token in tokens]
+        tokens = [token for token in tokens if token and token not in stop_words]
+        tokens = [lemmatizer.lemmatize(word, get_wordnet_pos(word)) for word in tokens]
+        processed_sentences.append(tokens)
+    
+    return processed_sentences
+
+class WordEncoder(nn.Module):
+    def __init__(self, embedding_matrix, hidden_dim):
+        super(WordEncoder, self).__init__()
+        vocab_size, embedding_dim = embedding_matrix.shape
+        self.embedding = nn.Embedding.from_pretrained(torch.FloatTensor(embedding_matrix), freeze=False)
+        self.gru = nn.GRU(embedding_dim, hidden_dim, bidirectional=True, batch_first=True)
+    
+    def forward(self, x):
+        embedded = self.embedding(x)
+        output, _ = self.gru(embedded)
+        return output
+
+class Attention(nn.Module):
+    def __init__(self, hidden_dim):
+        super(Attention, self).__init__()
+        self.attention = nn.Linear(hidden_dim * 2, 1)
+    
+    def forward(self, x):
+        weights = torch.tanh(self.attention(x))
+        weights = torch.softmax(weights, dim=1)
+        context = torch.sum(weights * x, dim=1)
+        return context
+
+class SentenceEncoder(nn.Module):
+    def __init__(self, hidden_dim):
+        super(SentenceEncoder, self).__init__()
+        self.gru = nn.GRU(hidden_dim, hidden_dim, bidirectional=True, batch_first=True)
+    
+    def forward(self, x):
+        output, _ = self.gru(x)
+        return output
+
+class HAN(nn.Module):
+    def __init__(self, embedding_matrix, hidden_dim):
+        super(HAN, self).__init__()
+        self.word_encoder = WordEncoder(embedding_matrix, hidden_dim)
+        self.word_attention = Attention(hidden_dim)
+        self.sentence_encoder = SentenceEncoder(hidden_dim)
+        self.sentence_attention = Attention(hidden_dim)
+        self.fc = nn.Linear(hidden_dim * 2, hidden_dim)
+    
+    def forward(self, documents):
+        sentence_representations = []
+        for sentences in documents:
+            word_encoded_sentences = [self.word_encoder(sentence) for sentence in sentences]
+            word_attended_sentences = [self.word_attention(sentence) for sentence in word_encoded_sentences]
+            sentence_representations.append(torch.stack(word_attended_sentences))
+        
+        sentence_representations = torch.stack(sentence_representations)
+        document_encoded = self.sentence_encoder(sentence_representations)
+        document_attended = self.sentence_attention(document_encoded)
+        
+        output = self.fc(document_attended)
+        return output
+
+def load_embeddings(file_path, embedding_dim=150):
+    embeddings_index = {}
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            values = line.split()
+            word = values[0]
+            coefs = np.asarray(values[1:], dtype='float32')
+            embeddings_index[word] = coefs
+    return embeddings_index
 
 def preprocess_image(image_path):
     image = Image.open(image_path).convert('RGB')
@@ -91,7 +162,6 @@ def load_yolov5_model(weights_path):
 
 def load_vgg19_model():
     vgg19 = models.vgg19(weights=models.VGG19_Weights.IMAGENET1K_V1)
-    vgg19.classifier = nn.Sequential(*list(vgg19.classifier.children())[:-1])
     return vgg19
 
 def generate_cam(image_tensor, model, original_image):
@@ -157,7 +227,7 @@ def classify_image(detections, threshold=0.5):
     if predicted_class_score >= threshold:
         return class_labels[predicted_class_index]
     else:
-        return None
+        return None   
 
 def process_pdfs_in_folder(folder_path, yolov5_model, vgg19_model):
     tokens = []
@@ -168,7 +238,7 @@ def process_pdfs_in_folder(folder_path, yolov5_model, vgg19_model):
             pdf_path = os.path.join(folder_path, file_name)
             combined_text = extract_title_and_abstract(pdf_path)
             tokens.append(preprocess_text(combined_text))
-            
+    
             page = convert_from_path(pdf_path, dpi=600)
             image_path = os.path.join(folder_path, "temp_image.jpg")
             page[0].save(image_path, 'JPEG')
@@ -194,3 +264,47 @@ yolov5_model = load_yolov5_model(weights_path)
 vgg19_model = load_vgg19_model()
 folder_path = 'C:/Users/SW6/Desktop/test'
 tokens, image_features = process_pdfs_in_folder(folder_path, yolov5_model, vgg19_model)
+
+embedding_dim = 50
+embedding_file_path = 'C:/Users/SW6/Desktop/test/glove.6B.50d.txt'
+technet_embeddings = load_embeddings(embedding_file_path, embedding_dim)
+all_tokens = [token for doc in tokens for sent in doc for token in sent]
+vocab = build_vocab_from_iterator([all_tokens], specials=['<unk>'])
+vocab.set_default_index(vocab['<unk>'])
+
+embedding_matrix = np.zeros((len(vocab), embedding_dim))
+for word, index in vocab.get_stoi().items():
+    embedding_vector = technet_embeddings.get(word)
+    if embedding_vector is not None:
+        embedding_matrix[index] = embedding_vector
+    else:
+        embedding_matrix[index] = np.random.normal(size=(embedding_dim,))
+
+indexed_documents = []
+for doc in tokens:
+    indexed_sentences = []
+    for sent in doc:
+        indexed_sent = [vocab[token] for token in sent]
+        indexed_sentences.append(indexed_sent)
+    indexed_documents.append(indexed_sentences)
+
+def pad_documents(documents, padding_value=0):
+    max_num_sentences = max(len(doc) for doc in documents)
+    max_num_tokens = max(len(sent) for doc in documents for sent in doc)
+
+    padded_documents = []
+    for doc in documents:
+        padded_sentences = []
+        for sent in doc:
+            padded_sent = sent + [padding_value] * (max_num_tokens - len(sent))
+            padded_sentences.append(padded_sent)
+        while len(padded_sentences) < max_num_sentences:
+            padded_sentences.append([padding_value] * max_num_tokens)
+        padded_documents.append(padded_sentences)
+
+    return torch.tensor(padded_documents)
+
+padded_documents = pad_documents(indexed_documents)
+hidden_dim = len(indexed_sent)
+model = HAN(embedding_matrix, hidden_dim)
+output = model(padded_documents)
