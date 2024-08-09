@@ -375,7 +375,7 @@ base_folder_path = 'C:/Users/SW6/Desktop/diplomski/Baza'
 tokens, image_features, flowchart_texts = process_pdfs_in_folder(base_folder_path, yolov5_model, vgg19_model)
 
 embedding_dim = 50
-embedding_file_path = 'C:/Users/SW6/Desktop/test/glove.6B.50d.txt'
+embedding_file_path = 'C:/Users/SW6/Desktop/diplomski/glove.6B.50d.txt'
 technet_embeddings = load_embeddings(embedding_file_path, embedding_dim)
 all_tokens = [token for doc in tokens for sent in doc for token in sent]
 all_tokens += [token for doc in flowchart_texts for sent in doc for token in sent]
