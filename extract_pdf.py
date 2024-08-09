@@ -39,7 +39,7 @@ def scan_pdfs_in_folders(root_folder, ipc_codes, output_folder):
                     print(f"Patent classified under IPC H found in: {pdf_path}")
                     save_first_page(pdf_path, output_folder)
 
-root_folder = 'C:/Users/SW6/Downloads/2023-29/US/2023/0230/744'
-ipc_codes = ['H01', 'H02', 'H03', 'H04', 'H05']
+root_folder = 'C:/Users/SW6/Desktop/novo'
+ipc_codes = ['H01', 'H02', 'H03', 'H04', 'H05', 'H10']
 output_folder = 'C:/Users/SW6/Downloads/test'
 scan_pdfs_in_folders(root_folder, ipc_codes, output_folder)
