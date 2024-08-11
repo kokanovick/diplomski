@@ -200,14 +200,21 @@ def generate_cam(image_tensor, model, original_image):
 def crop_schematic(image_path):
     image = cv2.imread(image_path)
     height, width = image.shape[:2]
-    gpu_image = cv2.cuda_GpuMat()
-    gpu_image.upload(image)
-    gpu_gray = cv2.cuda.cvtColor(gpu_image, cv2.COLOR_BGR2GRAY)
-    gpu_blur_filter = cv2.cuda.createGaussianFilter(gpu_gray.type(), -1, (5, 5), 0)
-    gpu_blurred = gpu_blur_filter.apply(gpu_gray)
-    gpu_edges = cv2.cuda.createCannyEdgeDetector(50, 150)
-    gpu_edges = gpu_edges.detect(gpu_blurred)
-    edges = gpu_edges.download()
+    
+    if cv2.cuda.getCudaEnabledDeviceCount() > 0:
+        gpu_image = cv2.cuda_GpuMat()
+        gpu_image.upload(image)
+        gpu_gray = cv2.cuda.cvtColor(gpu_image, cv2.COLOR_BGR2GRAY)
+        gpu_blur_filter = cv2.cuda.createGaussianFilter(gpu_gray.type(), -1, (5, 5), 0)
+        gpu_blurred = gpu_blur_filter.apply(gpu_gray)
+        gpu_edges = cv2.cuda.createCannyEdgeDetector(50, 150)
+        gpu_edges = gpu_edges.detect(gpu_blurred)
+        edges = gpu_edges.download()
+    else:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blurred, 50, 150)
+    
     dilated = cv2.dilate(edges, None, iterations=2)
     contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)   
     x_min, y_min, x_max, y_max = float('inf'), float('inf'), float('-inf'), float('-inf')
@@ -225,27 +232,35 @@ def crop_schematic(image_path):
             x_max = max(x_max, x + w)
             y_max = max(y_max, y + h)
     
-    image_host = gpu_image.download() 
-    cropped_image = image_host[y_min:y_max, x_min:x_max]
-    cropped_image_path = os.path.join(os.path.dirname(image_path), "cropped_image.jpg")
+    cropped_image = image[y_min:y_max, x_min:x_max]
+    cropped_image_path = os.path.join(os.path.dirname(image_path), "cropped_schematic.jpg")
     cv2.imwrite(cropped_image_path, cropped_image)
     return cropped_image_path
 
 def crop_flowchart(image_path):
     image = cv2.imread(image_path)
-    gpu_image = cv2.cuda_GpuMat()
-    gpu_image.upload(image)
-    gpu_gray = cv2.cuda.cvtColor(gpu_image, cv2.COLOR_BGR2GRAY)    
-    gray = gpu_gray.download()
+    
+    if cv2.cuda.getCudaEnabledDeviceCount() > 0:
+        gpu_image = cv2.cuda_GpuMat()
+        gpu_image.upload(image)
+        gpu_gray = cv2.cuda.cvtColor(gpu_image, cv2.COLOR_BGR2GRAY)    
+        gray = gpu_gray.download()
+    else:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
     thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-    gpu_thresh = cv2.cuda_GpuMat()
-    gpu_thresh.upload(thresh)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
-    gpu_kernel = cv2.cuda_GpuMat()
-    gpu_kernel.upload(kernel)
-    morph_filter = cv2.cuda.createMorphologyFilter(cv2.MORPH_CLOSE, cv2.CV_8UC1, kernel)
-    gpu_morph = morph_filter.apply(gpu_thresh)
-    morph = gpu_morph.download()
+    
+    if cv2.cuda.getCudaEnabledDeviceCount() > 0:
+        gpu_thresh = cv2.cuda_GpuMat()
+        gpu_thresh.upload(thresh)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+        morph_filter = cv2.cuda.createMorphologyFilter(cv2.MORPH_CLOSE, cv2.CV_8UC1, kernel)
+        gpu_morph = morph_filter.apply(gpu_thresh)
+        morph = gpu_morph.download()
+    else:
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+        morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    
     contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 1000]
     largest_area = 0
@@ -260,8 +275,9 @@ def crop_flowchart(image_path):
 
     cropped_image = image[y_min:y_max, x_min:x_max]
     cropped_image_path = os.path.join(os.path.dirname(image_path), "cropped_flowchart.jpg")
-    cv2.imwrite(cropped_image_path, cropped_image) 
+    cv2.imwrite(cropped_image_path, cropped_image)
     return cropped_image_path
+
 
 def extract_image_features(image_tensor, vgg19_model):
     vgg19_model.eval()
