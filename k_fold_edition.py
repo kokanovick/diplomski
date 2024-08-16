@@ -695,7 +695,7 @@ for train_index, test_index in skf.split(np.arange(num_nodes), labels):
     fold_val_losses = []
     fold_val_accuracies = []
 
-    for epoch in range(40):
+    for epoch in range(90):
         train_loss = train(model, data, optimizer, criterion)
         val_loss, val_acc = validate(model, data, criterion)
         early_stopping(val_loss)
