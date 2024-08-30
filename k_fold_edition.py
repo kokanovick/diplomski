@@ -545,17 +545,23 @@ class GraphSAGENetwork(nn.Module):
         return x
 
 def train(model, data, optimizer, criterion):
-    model.train()
-    optimizer.zero_grad()
+    model.train() 
+    optimizer.zero_grad() 
     x, edge_index = data.x.to(device), data.edge_index.to(device)
     y = data.y.to(device)
-    train_mask = data.train_mask.to(device)
+    train_mask = data.train_mask.to(device) 
     out = model(x, edge_index)
     loss = criterion(out[train_mask], y[train_mask])
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optimizer.step()
-    return loss.item()
+    model.eval()  
+    with torch.no_grad():  
+        out = model(x, edge_index)
+        _, predicted = torch.max(out[train_mask], dim=1)  
+        correct = (predicted == y[train_mask]).sum().item() 
+        accuracy = correct / train_mask.sum().item()  
+    return loss.item(), accuracy
 
 def validate(model, data, criterion):
     model.eval()
@@ -590,16 +596,16 @@ def grid_search(data, learning_rates):
     data.train_mask[train_idx] = True
     data.val_mask[val_idx] = True
     data.test_mask[test_idx] = True
-    model = GraphSAGENetwork(normalized_features.shape[1], 128, len(set(data.y.tolist()))).to(device)
+    model = GraphSAGENetwork(30, 128, len(set(data.y.tolist()))).to(device)
 
     for lr in learning_rates:
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         num_epochs = 10
         print(f'Learning rate: {lr}')
         for epoch in range(num_epochs):
-            train_loss = train(model, data, optimizer, criterion)
+            train_loss, train_acc = train(model, data, optimizer, criterion)
             val_loss, val_acc = validate(model, data, criterion)
-            print(f'Epoch: {epoch+1}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}')
+            print(f'Epoch: {epoch+1}, Train Loss: {train_loss:.4f}, Train Accuracy: {train_acc:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}')
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -658,14 +664,16 @@ def plot_confusion_matrix(y_true, y_pred, classes, part):
     plt.xlabel('Predviđena oznaka')
     plt.ylabel('Prava oznaka')
     plt.title('Matrica zabune')
-    plt.savefig("C:/Users/SW6/Desktop/diplomski/confusion_matrix" + str(part) + ".png")
+    plt.savefig("/content/confusion_matrix" + str(part) + ".png")
     plt.close()
 
 classes = ["H01", "H02", "H03", "H04", "H05", "H10"]
 n_splits = 10
 skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+all_test_metrics = []
 
 train_losses = []
+train_accuracies = []
 val_losses = []
 val_accuracies = []
 test_accuracies = []
@@ -673,6 +681,7 @@ test_f1_scores = []
 test_precisions = []
 test_recalls = []
 best_lr, best_val_loss, best_val_acc = grid_search(data, learning_rates)
+
 
 fold = 1
 for train_index, test_index in skf.split(np.arange(num_nodes), labels):
@@ -687,29 +696,30 @@ for train_index, test_index in skf.split(np.arange(num_nodes), labels):
     data.val_mask[val_index] = True
     data.test_mask[test_index] = True
     data.y = torch.tensor(labels, dtype=torch.long)
-
-    model = GraphSAGENetwork(normalized_features.shape[1], 128, len(set(data.y.tolist()))).to(device)
+    model = GraphSAGENetwork(30, 128, len(set(data.y.tolist()))).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=best_lr)
     early_stopping = EarlyStopping(patience=5)
     fold_train_losses = []
+    fold_train_accuracies = []
     fold_val_losses = []
     fold_val_accuracies = []
-
-    for epoch in range(100):
-        train_loss = train(model, data, optimizer, criterion)
+    for epoch in range(90):
+        train_loss, train_acc = train(model, data, optimizer, criterion)
         val_loss, val_acc = validate(model, data, criterion)
         early_stopping(val_loss)
 
         fold_train_losses.append(train_loss)
+        fold_train_accuracies.append(train_acc)
         fold_val_losses.append(val_loss)
         fold_val_accuracies.append(val_acc)
 
         if early_stopping.early_stop:
             print("Early stopping")
             break
-        print(f'Epoch: {epoch+1}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}')
+        print(f'Epoch: {epoch+1}, Train Loss: {train_loss:.4f}, Train Accuracy: {train_acc:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}')
 
     train_losses.append(fold_train_losses)
+    train_accuracies.append(fold_train_accuracies)
     val_losses.append(fold_val_losses)
     val_accuracies.append(fold_val_accuracies)
     test_acc, test_f1, test_prec, test_recall, y_true, y_pred = test(model, data)
@@ -726,6 +736,7 @@ def pad_list(lst, max_len, pad_value=None):
     return lst + [pad_value] * (max_len - len(lst))
 
 avg_train_losses = np.mean([pad_list(fold_losses, max_epochs, np.nan) for fold_losses in train_losses], axis=0)
+avg_train_accuracies = np.mean([pad_list(fold_accs, max_epochs, np.nan) for fold_accs in train_accuracies], axis=0)
 avg_val_losses = np.mean([pad_list(fold_losses, max_epochs, np.nan) for fold_losses in val_losses], axis=0)
 avg_val_accuracies = np.mean([pad_list(fold_accs, max_epochs, np.nan) for fold_accs in val_accuracies], axis=0)
 
@@ -734,18 +745,19 @@ plt.plot(avg_train_losses, label='Prosječan trening gubitak')
 plt.plot(avg_val_losses, label='Prosječan validacijski gubitak')
 plt.xlabel('Epoha')
 plt.ylabel('Gubitak')
-plt.title('Prosječni trening i validacijski gubitci kroz nabore') 
+plt.title('Prosječni trening i validacijski gubitci kroz nabore')
 plt.legend()
-plt.savefig("C:/Users/SW6/Desktop/diplomski/average_train_valid_loss.png")
+plt.savefig("/content/average_train_valid_loss.png")
 plt.show()
 
 plt.figure(figsize=(10, 6))
+plt.plot(avg_train_accuracies, label='Prosječna trening točnost')
 plt.plot(avg_val_accuracies, label='Prosječna validacijska točnost')
 plt.xlabel('Epoha')
 plt.ylabel('Točnost')
-plt.title('Prosječna validacijska točnost kroz nabore')
+plt.title('Prosječna trening i validacijska točnost kroz nabore')
 plt.legend()
-plt.savefig("C:/Users/SW6/Desktop/diplomski/average_valid_acc.png")
+plt.savefig("/content/average_valid_acc.png")
 plt.show()
 
 plt.figure(figsize=(10, 6))
@@ -757,5 +769,5 @@ plt.xlabel('Nabor')
 plt.ylabel('Rezultat')
 plt.title('Promatrane metrike kroz nabore')
 plt.legend()
-plt.savefig("C:/Users/SW6/Desktop/diplomski/test_metrics.png")
+plt.savefig("/content/test_metrics.png")
 plt.show()
