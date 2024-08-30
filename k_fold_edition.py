@@ -596,8 +596,8 @@ def grid_search(data, learning_rates):
     data.train_mask[train_idx] = True
     data.val_mask[val_idx] = True
     data.test_mask[test_idx] = True
-    model = GraphSAGENetwork(30, 128, len(set(data.y.tolist()))).to(device)
-
+    model = GraphSAGENetwork(normalized_features.shape[1], 128, len(set(data.y.tolist()))).to(device)
+    
     for lr in learning_rates:
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         num_epochs = 10
@@ -664,7 +664,7 @@ def plot_confusion_matrix(y_true, y_pred, classes, part):
     plt.xlabel('Predviđena oznaka')
     plt.ylabel('Prava oznaka')
     plt.title('Matrica zabune')
-    plt.savefig("/content/confusion_matrix" + str(part) + ".png")
+    plt.savefig("C:/Users/SW6/Desktop/diplomski/confusion_matrix" + str(part) + ".png")
     plt.close()
 
 classes = ["H01", "H02", "H03", "H04", "H05", "H10"]
@@ -696,14 +696,14 @@ for train_index, test_index in skf.split(np.arange(num_nodes), labels):
     data.val_mask[val_index] = True
     data.test_mask[test_index] = True
     data.y = torch.tensor(labels, dtype=torch.long)
-    model = GraphSAGENetwork(30, 128, len(set(data.y.tolist()))).to(device)
+    model = GraphSAGENetwork(normalized_features.shape[1], 128, len(set(data.y.tolist()))).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=best_lr)
     early_stopping = EarlyStopping(patience=5)
     fold_train_losses = []
     fold_train_accuracies = []
     fold_val_losses = []
     fold_val_accuracies = []
-    for epoch in range(90):
+    for epoch in range(100):
         train_loss, train_acc = train(model, data, optimizer, criterion)
         val_loss, val_acc = validate(model, data, criterion)
         early_stopping(val_loss)
@@ -747,7 +747,7 @@ plt.xlabel('Epoha')
 plt.ylabel('Gubitak')
 plt.title('Prosječni trening i validacijski gubitci kroz nabore')
 plt.legend()
-plt.savefig("/content/average_train_valid_loss.png")
+plt.savefig("C:/Users/SW6/Desktop/diplomski/average_train_valid_loss.png")
 plt.show()
 
 plt.figure(figsize=(10, 6))
@@ -757,7 +757,7 @@ plt.xlabel('Epoha')
 plt.ylabel('Točnost')
 plt.title('Prosječna trening i validacijska točnost kroz nabore')
 plt.legend()
-plt.savefig("/content/average_valid_acc.png")
+plt.savefig("C:/Users/SW6/Desktop/diplomski/average_valid_acc.png")
 plt.show()
 
 plt.figure(figsize=(10, 6))
@@ -769,5 +769,5 @@ plt.xlabel('Nabor')
 plt.ylabel('Rezultat')
 plt.title('Promatrane metrike kroz nabore')
 plt.legend()
-plt.savefig("/content/test_metrics.png")
+plt.savefig("C:/Users/SW6/Desktop/diplomski/test_metrics.png")
 plt.show()
